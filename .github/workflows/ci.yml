@@ -1,0 +1,39 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install -e ".[test]"
+      - run: pytest tests/unit_tests -q
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      synapcores:
+        image: synapcores/community:latest
+        ports: ["8080:8080"]
+        env:
+          AIDB_ADMIN_PASSWORD: ci-admin-password
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[test]"
+      - name: Wait for SynapCores
+        run: for i in $(seq 1 90); do curl -fs http://127.0.0.1:8080/health && break; sleep 2; done
+      - run: pytest tests/integration_tests -q
+        env:
+          SYNAPCORES_URL: http://127.0.0.1:8080
+          SYNAPCORES_USERNAME: admin
+          SYNAPCORES_PASSWORD: ci-admin-password
