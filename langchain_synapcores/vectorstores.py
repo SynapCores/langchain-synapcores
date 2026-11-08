@@ -127,7 +127,13 @@ class SynapCoresVectorStore(VectorStore):
     def _table_exists(self) -> bool:
         if self._table_ready:
             return True
-        rows = self._sql("SHOW TABLES")
+        try:
+            rows = self._sql("SHOW TABLES")
+        except SynapCoresError as exc:
+            # A database that hasn't been created yet simply holds no table.
+            if "does not exist" in str(exc).lower():
+                return False
+            raise
         names = {str(next(iter(r.values()))) for r in rows if r}
         self._table_ready = self.table_name in names
         return self._table_ready
@@ -214,7 +220,12 @@ class SynapCoresVectorStore(VectorStore):
 
     def drop_table(self) -> None:
         """Delete the table and all its documents."""
-        self._sql(f"DROP TABLE IF EXISTS {self.table_name}")
+        try:
+            self._sql(f"DROP TABLE IF EXISTS {self.table_name}")
+        except SynapCoresError as exc:
+            # Nothing to drop if the database was never created.
+            if "does not exist" not in str(exc).lower():
+                raise
         self._table_ready = False
 
     # -- search -------------------------------------------------------------

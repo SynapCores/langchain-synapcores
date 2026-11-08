@@ -98,6 +98,7 @@ class FakeGateway:
         self.expire_first = False
         self.rows: List[List[Any]] = []
         self.columns: List[str] = []
+        self.missing_db = False
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content or b"{}")
@@ -113,6 +114,11 @@ class FakeGateway:
                 200, json={"data": {"embeddings": [[0.1, 0.2, 0.3] for _ in body["texts"]]}}
             )
         sql = body.get("sql", "")
+        if self.missing_db and body.get("database"):
+            return httpx.Response(
+                404,
+                json={"error": {"code": "not_found", "message": f"Database '{body['database']}' does not exist"}},
+            )
         if sql == "SHOW TABLES":
             return httpx.Response(
                 200,
@@ -215,3 +221,17 @@ def test_vectorstore_rejects_bad_names() -> None:
         SynapCoresVectorStore(DeterministicFakeEmbedding(size=3), table_name="x;drop", client=object())  # type: ignore[arg-type]
     with pytest.raises(ValueError):
         SynapCoresVectorStore(DeterministicFakeEmbedding(size=3), distance="manhattan", client=object())  # type: ignore[arg-type]
+
+
+def test_vectorstore_reads_before_database_exists() -> None:
+    gw = FakeGateway()
+    gw.missing_db = True
+    store = SynapCoresVectorStore(
+        DeterministicFakeEmbedding(size=3),
+        table_name="docs",
+        database="fresh",
+        client=gw.client(api_key="ak_test"),
+    )
+    assert store.similarity_search("anything", k=2) == []
+    assert store.get_by_ids(["1"]) == []
+    store.drop_table()  # no-op, must not raise
