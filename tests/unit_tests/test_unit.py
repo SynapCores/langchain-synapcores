@@ -235,3 +235,23 @@ def test_vectorstore_reads_before_database_exists() -> None:
     assert store.similarity_search("anything", k=2) == []
     assert store.get_by_ids(["1"]) == []
     store.drop_table()  # no-op, must not raise
+
+
+def test_embeddings_split_batch_on_deadline() -> None:
+    calls: List[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        texts = json.loads(request.content)["texts"]
+        calls.append(len(texts))
+        if len(texts) > 1:
+            return httpx.Response(
+                504, json={"error": {"code": "deadline", "message": "Inference deadline expired"}}
+            )
+        return httpx.Response(200, json={"data": {"embeddings": [[0.1, 0.2, 0.3]]}})
+
+    http = httpx.Client(base_url="http://gw", transport=httpx.MockTransport(handler))
+    emb = SynapCoresEmbeddings(
+        client=SynapCoresClient("http://gw", http_client=http, api_key="ak_test"), batch_size=4
+    )
+    assert len(emb.embed_documents(["a", "b", "c", "d", "e"])) == 5
+    assert calls.count(1) == 5

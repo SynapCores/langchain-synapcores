@@ -6,7 +6,7 @@ from typing import Any, List, Optional
 
 from langchain_core.embeddings import Embeddings
 
-from langchain_synapcores._client import SynapCoresClient
+from langchain_synapcores._client import SynapCoresClient, SynapCoresError
 
 
 class SynapCoresEmbeddings(Embeddings):
@@ -26,7 +26,8 @@ class SynapCoresEmbeddings(Embeddings):
     Args:
         model: Optional embedding model name configured in SynapCores.
         url, api_key, username, password: Connection settings (see ``SynapCoresClient``).
-        batch_size: Texts per request.
+        batch_size: Texts per request. A batch that hits the server's inference
+            deadline is split in half and retried automatically.
     """
 
     def __init__(
@@ -38,7 +39,7 @@ class SynapCoresEmbeddings(Embeddings):
         username: Optional[str] = None,
         password: Optional[str] = None,
         client: Optional[SynapCoresClient] = None,
-        batch_size: int = 64,
+        batch_size: int = 3,
         **kwargs: Any,
     ) -> None:
         self.model = model
@@ -50,8 +51,18 @@ class SynapCoresEmbeddings(Embeddings):
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
         out: List[List[float]] = []
         for i in range(0, len(texts), self.batch_size):
-            out.extend(self.client.embed(texts[i : i + self.batch_size], model=self.model))
+            out.extend(self._embed_batch(texts[i : i + self.batch_size]))
         return out
+
+    def _embed_batch(self, batch: List[str]) -> List[List[float]]:
+        try:
+            return self.client.embed(batch, model=self.model)
+        except SynapCoresError as exc:
+            msg = str(exc).lower()
+            if len(batch) > 1 and ("deadline" in msg or "timeout" in msg or "timed out" in msg):
+                mid = len(batch) // 2
+                return self._embed_batch(batch[:mid]) + self._embed_batch(batch[mid:])
+            raise
 
     def embed_query(self, text: str) -> List[float]:
         return self.client.embed([text], model=self.model)[0]
